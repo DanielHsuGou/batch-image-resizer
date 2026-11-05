@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client-Side Batch Image Resizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        /* Checkerboard pattern for transparent backgrounds */
+        .bg-checkerboard {
+            background-image: 
+                linear-gradient(45deg, #1f2937 25%, transparent 25%), 
+                linear-gradient(-45deg, #1f2937 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #1f2937 75%), 
+                linear-gradient(-45deg, transparent 75%, #1f2937 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            background-color: #111827;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-6">
+
+    <div class="max-w-5xl mx-auto">
+        <!-- Header -->
+        <header class="text-center mb-10">
+            <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                Batch Image Resizer & Cropper
+            </h1>
+            <p class="text-gray-400 mt-2">100% Client-Side. No files are uploaded to a server.</p>
+        </header>
+
+        <!-- Main Panel -->
+        <div class="bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-700">
+            
+            <!-- Settings -->
+            <div class="flex gap-6 mb-8 bg-gray-900 p-4 rounded-lg border border-gray-700">
+                <div class="flex-1">
+                    <label class="block text-sm font-medium text-gray-400 mb-1">Target Width (px)</label>
+                    <input type="number" id="widthInput" value="135" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white focus:outline-none focus:border-blue-500">
+                </div>
+                <div class="flex-1">
+                    <label class="block text-sm font-medium text-gray-400 mb-1">Target Height (px)</label>
+                    <input type="number" id="heightInput" value="500" class="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white focus:outline-none focus:border-blue-500">
+                </div>
+            </div>
+
+            <!-- Dropzone -->
+            <div id="dropzone" class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center hover:bg-gray-700/50 transition-colors cursor-pointer relative">
+                <input type="file" id="fileInput" multiple accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                <svg class="mx-auto h-10 w-10 text-gray-400 mb-2" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                    <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <p class="text-lg font-medium text-gray-300">Click or drag & drop images here</p>
+                <p class="text-sm text-gray-500 mt-1">PNG, JPG, JPEG, GIF, BMP</p>
+            </div>
+
+            <!-- NEW: Uploaded Files Preview -->
+            <div id="uploadPreviewArea" class="mt-6 hidden">
+                <h3 class="text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wider">Selected Images</h3>
+                <div id="uploadGrid" class="flex gap-2 overflow-x-auto pb-2">
+                    <!-- Upload thumbnails injected here -->
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="mt-6 flex gap-4">
+                <button id="processBtn" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    Process Images
+                </button>
+                <button id="downloadAllBtn" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-lg transition hidden">
+                    Download All (.zip)
+                </button>
+            </div>
+
+            <!-- Loading Spinner -->
+            <div id="loading" class="text-center mt-6 hidden">
+                <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                <p class="mt-2 text-gray-400">Processing images in your browser...</p>
+            </div>
+
+            <!-- Results Grid -->
+            <div id="resultsArea" class="mt-8 hidden">
+                <h3 class="text-xl font-bold mb-4 text-gray-200">Results</h3>
+                <div id="resultsGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                    <!-- Images injected here via JS -->
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const dropzone = document.getElementById('dropzone');
+        const processBtn = document.getElementById('processBtn');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
+        const loading = document.getElementById('loading');
+        const resultsArea = document.getElementById('resultsArea');
+        const resultsGrid = document.getElementById('resultsGrid');
+        const uploadPreviewArea = document.getElementById('uploadPreviewArea');
+        const uploadGrid = document.getElementById('uploadGrid');
+        
+        let processedFiles = [];
+
+        // --- UI Interactions ---
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('border-blue-500', 'bg-gray-700/50');
+        });
+        dropzone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('border-blue-500', 'bg-gray-700/50');
+        });
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('border-blue-500', 'bg-gray-700/50');
+            fileInput.files = e.dataTransfer.files;
+            updateFileCount();
+        });
+
+        fileInput.addEventListener('change', updateFileCount);
+
+        function updateFileCount() {
+            uploadGrid.innerHTML = ''; // Clear previous previews
+            const files = fileInput.files;
+
+            if (files.length > 0) {
+                processBtn.disabled = false;
+                processBtn.textContent = `Process ${files.length} Image(s)`;
+                uploadPreviewArea.classList.remove('hidden');
+
+                // Generate upload previews
+                Array.from(files).forEach(file => {
+                    const imgUrl = URL.createObjectURL(file);
+                    const imgWrapper = document.createElement('div');
+                    imgWrapper.className = 'w-20 h-20 shrink-0 bg-gray-900 rounded border border-gray-700 overflow-hidden relative';
+                    imgWrapper.innerHTML = `<img src="${imgUrl}" class="w-full h-full object-cover" onload="URL.revokeObjectURL(this.src)">`;
+                    uploadGrid.appendChild(imgWrapper);
+                });
+            } else {
+                processBtn.disabled = true;
+                processBtn.textContent = 'Process Images';
+                uploadPreviewArea.classList.add('hidden');
+            }
+        }
+
+        // --- Core Image Processing Logic ---
+        function processImage(file, targetWidth, targetHeight) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const url = URL.createObjectURL(file);
+                
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+                    const ctx = canvas.getContext('2d');
+
+                    const originalWidth = img.width;
+                    const originalHeight = img.height;
+                    const aspectRatio = originalWidth / originalHeight;
+                    const targetRatio = targetWidth / targetHeight;
+
+                    let sWidth, sHeight, sx, sy;
+
+                    // "Cover" logic: calculate which parts to crop
+                    if (targetRatio < aspectRatio) {
+                        // Crop left and right
+                        sHeight = originalHeight;
+                        sWidth = originalHeight * targetRatio;
+                        sx = (originalWidth - sWidth) / 2;
+                        sy = 0;
+                    } else {
+                        // Crop top and bottom
+                        sWidth = originalWidth;
+                        sHeight = originalWidth / targetRatio;
+                        sx = 0;
+                        sy = (originalHeight - sHeight) / 2;
+                    }
+
+                    // Draw the cropped portion onto the target canvas
+                    ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
+                    
+                    // Convert to JPEG Blob
+                    canvas.toBlob((blob) => {
+                        // Create new filename (force .jpg)
+                        const baseName = file.name.replace(/\.[^/.]+$/, "");
+                        const newName = baseName + ".jpg";
+                        
+                        resolve({
+                            originalName: file.name,
+                            newName: newName,
+                            blob: blob,
+                            dataUrl: canvas.toDataURL('image/jpeg', 0.95)
+                        });
+                    }, 'image/jpeg', 0.95);
+                    
+                    URL.revokeObjectURL(url);
+                };
+
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error(`Failed to load image: ${file.name}`));
+                };
+
+                img.src = url;
+            });
+        }
+
+        // --- Process Button Click ---
+        processBtn.addEventListener('click', async () => {
+            if (fileInput.files.length === 0) return;
+
+            const targetWidth = parseInt(document.getElementById('widthInput').value) || 135;
+            const targetHeight = parseInt(document.getElementById('heightInput').value) || 500;
+
+            processBtn.disabled = true;
+            downloadAllBtn.classList.add('hidden');
+            loading.classList.remove('hidden');
+            resultsArea.classList.add('hidden');
+            resultsGrid.innerHTML = '';
+            processedFiles = [];
+
+            const files = Array.from(fileInput.files);
+
+            for (let i = 0; i < files.length; i++) {
+                try {
+                    const processed = await processImage(files[i], targetWidth, targetHeight);
+                    processedFiles.push(processed);
+                    
+                    // Create preview card - FIXED UI DISPLAY
+                    const card = document.createElement('div');
+                    card.className = 'bg-gray-900 rounded-lg overflow-hidden border border-gray-700 flex flex-col';
+                    card.innerHTML = `
+                        <div class="bg-checkerboard flex items-center justify-center p-3 h-48">
+                            <img src="${processed.dataUrl}" class="max-h-full max-w-full object-contain shadow-md bg-white" alt="Resized">
+                        </div>
+                        <div class="p-3 flex-1 flex flex-col">
+                            <p class="text-[11px] text-gray-500 truncate" title="${processed.originalName}">${processed.originalName}</p>
+                            <p class="text-xs text-emerald-400 font-bold mt-1 mb-2">${targetWidth} x ${targetHeight} px</p>
+                            
+                            <button class="mt-auto w-full bg-gray-800 hover:bg-gray-700 border border-gray-600 text-xs py-1.5 rounded transition" onclick="downloadSingle(${i})">
+                                Download
+                            </button>
+                        </div>
+                    `;
+                    resultsGrid.appendChild(card);
+                } catch (error) {
+                    console.error(error);
+                    alert(`Error processing ${files[i].name}`);
+                }
+            }
+
+            loading.classList.add('hidden');
+            resultsArea.classList.remove('hidden');
+            downloadAllBtn.classList.remove('hidden');
+            processBtn.disabled = false;
+        });
+
+        // --- Download Individual File ---
+        window.downloadSingle = (index) => {
+            const file = processedFiles[index];
+            saveAs(file.blob, file.newName);
+        };
+
+        // --- Download All as ZIP ---
+        downloadAllBtn.addEventListener('click', () => {
+            if (processedFiles.length === 0) return;
+            
+            const zip = new JSZip();
+            const folder = zip.folder("resized");
+
+            processedFiles.forEach((img) => {
+                // Add the blob directly to the zip
+                folder.file(img.newName, img.blob);
+            });
+
+            zip.generateAsync({type:"blob"}).then(function(content) {
+                saveAs(content, "resized_images.zip");
+            });
+        });
+    </script>
+</body>
+</html>
